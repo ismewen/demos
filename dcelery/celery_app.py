@@ -1,9 +1,9 @@
-
 from celery import Celery
 from flask import current_app
 
 import settings
 from core import create_app
+from modules.routines.beat import FlaskBeat
 
 
 def make_celery(app):
@@ -18,6 +18,7 @@ def make_celery(app):
                 return self.run(*args, **kwargs)
 
     celery.Task = ContextTask
+    celery.Beat = celery.subclass_with_self(FlaskBeat)
     return celery
 
 
