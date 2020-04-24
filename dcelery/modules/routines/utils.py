@@ -2,8 +2,8 @@
 # -- XXX This module must not use translation as that causes
 # -- a recursive loader import!
 
-from django.utils import timezone
 import settings
+from . import timezone
 
 is_aware = timezone.is_aware
 
@@ -11,7 +11,7 @@ is_aware = timezone.is_aware
 now_localtime = getattr(timezone, 'template_localtime', timezone.localtime)
 
 
-def make_aware(value):
+def   make_aware(value):
     """Force datatime to have timezone information."""
     if getattr(settings, 'USE_TZ', False):
         # naive datetimes are assumed to be in UTC.

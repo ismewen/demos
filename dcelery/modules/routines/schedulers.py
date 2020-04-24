@@ -13,10 +13,8 @@ from celery.utils.log import get_logger
 from celery.utils.time import maybe_make_aware
 from kombu.utils.json import dumps, loads
 
-from django.conf import settings
-from django.db import transaction, close_old_connections
-from django.db.utils import DatabaseError, InterfaceError
-from django.core.exceptions import ObjectDoesNotExist
+import settings
+from core import db
 
 from .models import (
     PeriodicTask, PeriodicTasks,
@@ -47,10 +45,10 @@ class ModelEntry(ScheduleEntry):
     """Scheduler entry taken from database row."""
 
     model_schedules = (
-        (schedules.crontab, CrontabSchedule, 'crontab'),
-        (schedules.schedule, IntervalSchedule, 'interval'),
-        (schedules.solar, SolarSchedule, 'solar'),
-        (clocked, ClockedSchedule, 'clocked')
+        (schedules.crontab, CrontabSchedule, 'model_schedule'),
+        (schedules.schedule, IntervalSchedule, 'model_schedule'),
+        (schedules.solar, SolarSchedule, 'model_schedule'),
+        (clocked, ClockedSchedule, 'model_schedule')
     )
     save_fields = ['last_run_at', 'total_run_count', 'no_changes']
 
@@ -62,7 +60,7 @@ class ModelEntry(ScheduleEntry):
         self.task = model.task
         try:
             self.schedule = model.schedule
-        except model.DoesNotExist:
+        except Exception as e:
             logger.error(
                 'Disabling schedule %s that was removed from database',
                 self.name,
@@ -137,7 +135,7 @@ class ModelEntry(ScheduleEntry):
         last_run_at_in_tz = maybe_make_aware(self.last_run_at).astimezone(tz)
         return self.schedule.is_due(last_run_at_in_tz)
 
-    def _default_now(self):
+    def default_now(self):
         # The PyTZ datetime must be localised for the Django-Celery-Beat
         # scheduler to work. Keep in mind that timezone arithmatic
         # with a localized timezone may be inaccurate.
@@ -161,28 +159,32 @@ class ModelEntry(ScheduleEntry):
     def save(self):
         # Object may not be synchronized, so only
         # change the fields we care about.
-        obj = type(self.model)._default_manager.get(pk=self.model.pk)
+        model_cls = type(self.model)
+        obj = model_cls.query.filter(model_cls.id == self.model.id).first()
         for field in self.save_fields:
             setattr(obj, field, getattr(self.model, field))
-
         obj.save()
 
     @classmethod
     def to_model_schedule(cls, schedule):
         for schedule_type, model_type, model_field in cls.model_schedules:
             schedule = schedules.maybe_schedule(schedule)
+
             if isinstance(schedule, schedule_type):
                 model_schedule = model_type.from_schedule(schedule)
-                model_schedule.save()
                 return model_schedule, model_field
         raise ValueError(
             'Cannot convert schedule type {0!r} to model'.format(schedule))
 
     @classmethod
     def from_entry(cls, name, app=None, **entry):
-        return cls(PeriodicTask._default_manager.update_or_create(
-            name=name, defaults=cls._unpack_fields(**entry),
-        ), app=app)
+        # 数据库的优先
+        task = PeriodicTask.query.filter(PeriodicTask.name == name).first()
+        if not task:
+            kwargs = cls._unpack_fields(**entry)
+            task = PeriodicTask(name=name, **kwargs)
+            task.save()
+        return cls(task, app=app)
 
     @classmethod
     def _unpack_fields(cls, schedule,
@@ -246,7 +248,7 @@ class DatabaseScheduler(Scheduler):
     def all_as_schedule(self):
         debug('DatabaseScheduler: Fetching database schedule')
         s = {}
-        for model in self.Model.objects.enabled():
+        for model in self.Model.query.filter(self.Model.enabled == True):
             try:
                 s[model.name] = self.Entry(model, app=self.app)
             except ValueError:
@@ -255,26 +257,14 @@ class DatabaseScheduler(Scheduler):
 
     def schedule_changed(self):
         try:
-            close_old_connections()
-
+            db.session.commit()
             # If MySQL is running with transaction isolation level
             # REPEATABLE-READ (default), then we won't see changes done by
             # other transactions until the current transaction is
             # committed (Issue #41).
-            try:
-                transaction.commit()
-            except transaction.TransactionManagementError:
-                pass  # not in transaction management.
-
             last, ts = self._last_timestamp, self.Changes.last_change()
-        except DatabaseError as exc:
-            logger.exception('Database gave error: %r', exc)
-            return False
-        except InterfaceError:
-            warning(
-                'DatabaseScheduler: InterfaceError in schedule_changed(), '
-                'waiting to retry in next call...'
-            )
+        except Exception as e:
+            print(e)
             return False
 
         try:
@@ -296,22 +286,15 @@ class DatabaseScheduler(Scheduler):
         _tried = set()
         _failed = set()
         try:
-            close_old_connections()
-
             while self._dirty:
                 name = self._dirty.pop()
                 try:
                     self.schedule[name].save()
                     _tried.add(name)
-                except (KeyError, ObjectDoesNotExist):
+                except (KeyError,):
                     _failed.add(name)
-        except DatabaseError as exc:
-            logger.exception('Database error while sync: %r', exc)
-        except InterfaceError:
-            warning(
-                'DatabaseScheduler: InterfaceError in sync(), '
-                'waiting to retry in next call...'
-            )
+        except Exception as e:
+            print(e)
         finally:
             # retry later, only for the failed ones
             self._dirty |= _failed
@@ -371,21 +354,3 @@ class DatabaseScheduler(Scheduler):
                     repr(entry) for entry in self._schedule.values()),
                       )
         return self._schedule
-
-
-class JcyModelEntry(ModelEntry):
-
-    # database's priority is higher than file scheduler
-
-    @classmethod
-    def from_entry(cls, name, app=None, **entry):
-        task = PeriodicTask._default_manager.filter(name=name).first()
-        if task:
-            return cls(task, app=app)
-        return cls(PeriodicTask._default_manager.update_or_create(
-            name=name, defaults=cls._unpack_fields(**entry),
-        ), app=app)
-
-
-class JcyDatabaseScheduler(DatabaseScheduler):
-    Entry = JcyModelEntry

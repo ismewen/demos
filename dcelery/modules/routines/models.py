@@ -1,13 +1,17 @@
 from datetime import timedelta
+
+import arrow
 from celery import schedules
 from flask_babel import gettext as _
+from sqlalchemy import func
 
 from core import db
-from . import managers, validators
+from modules.routines.sqltypes import TzString
 from .tzcrontab import TzAwareCrontab
 from .utils import make_aware, now
 from .clockedschedule import clocked
 
+import settings
 
 DAYS = 'days'
 HOURS = 'hours'
@@ -39,24 +43,42 @@ def cronexp(field):
     return field and str(field).replace(' ', '') or '*'
 
 
-class SolarSchedule(db.Model):
+class ScheduleBase(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    type = db.Column(db.String(128))
+
+    __mapper_args__ = {
+        'polymorphic_identity': 'Schedule',
+        'polymorphic_on': type
+    }
+
+    def save(self):
+        db.session.add(self)
+        db.session.commit()
+
+
+class SolarSchedule(ScheduleBase):
     """Schedule following astronomical patterns.
 
     Example: to run every sunrise in New York City:
     event='sunrise', latitude=40.7128, longitude=74.0060
     """
 
-    id = db.Columen(db.Strin)
-    event = db.Column(db.String(24),doc=_("Solar Event"))
+    id = db.Column(db.Integer, db.ForeignKey(ScheduleBase.id), primary_key=True)
+    event = db.Column(db.String(24), doc=_("Solar Event"))
     latitude = db.Column(db.Numeric(9, 6), doc=_("Latitude"))
     longitude = db.Column(db.Numeric(9, 6), doc=_("Longtitude"))
+
+    __mapper_args__ = {
+        'polymorphic_identity': 'SolarSchedule',
+    }
 
     @property
     def schedule(self):
         return schedules.solar(self.event,
                                self.latitude,
                                self.longitude,
-                               nowfun=lambda: make_aware(now()))
+                               nowfun=lambda: arrow.utcnow().datetime)
 
     @classmethod
     def from_schedule(cls, schedule):
@@ -73,7 +95,7 @@ class SolarSchedule(db.Model):
         )
 
 
-class IntervalSchedule(db.Model):
+class IntervalSchedule(ScheduleBase):
     """Schedule executing on a regular interval.
 
     Example: execute every 2 days
@@ -88,26 +110,12 @@ class IntervalSchedule(db.Model):
 
     PERIOD_CHOICES = PERIOD_CHOICES
 
-    every = models.IntegerField(
-        null=False,
-        verbose_name=_('Number of Periods'),
-        help_text=_('Number of interval periods to wait before '
-                    'running the task again'),
-        validators=[MinValueValidator(1)],
-    )
-    every = db.Column(db)
-    period = models.CharField(
-        max_length=24, choices=PERIOD_CHOICES,
-        verbose_name=_('Interval Period'),
-        help_text=_('The type of period between task runs (Example: days)'),
-    )
-
-    class Meta:
-        """Table information."""
-
-        verbose_name = _('interval')
-        verbose_name_plural = _('intervals')
-        ordering = ['period', 'every']
+    period = db.Column(db.String(24))
+    every = db.Column(db.Integer)
+    id = db.Column(db.Integer, db.ForeignKey(ScheduleBase.id), primary_key=True)
+    __mapper_args__ = {
+        'polymorphic_identity': 'IntervalSchedule',
+    }
 
     @property
     def schedule(self):
@@ -140,26 +148,15 @@ class IntervalSchedule(db.Model):
         return self.period[:-1]
 
 
-class ClockedSchedule(db.Model):
+class ClockedSchedule(ScheduleBase):
     """clocked schedule."""
+    id = db.Column(db.Integer, db.ForeignKey(ScheduleBase.id), primary_key=True)
+    clocked_time = db.Column(db.DateTime)
+    enabled = db.Column(db.Boolean)
 
-    clocked_time = models.DateTimeField(
-        verbose_name=_('Clock Time'),
-        help_text=_('Run the task at clocked time'),
-    )
-    enabled = models.BooleanField(
-        default=True,
-        editable=False,
-        verbose_name=_('Enabled'),
-        help_text=_('Set to False to disable the schedule'),
-    )
-
-    class Meta:
-        """Table information."""
-
-        verbose_name = _('clocked')
-        verbose_name_plural = _('clocked')
-        ordering = ['clocked_time']
+    __mapper_args__ = {
+        'polymorphic_identity': 'ClockedSchedule',
+    }
 
     def __str__(self):
         return '{} {}'.format(self.clocked_time, self.enabled)
@@ -177,7 +174,7 @@ class ClockedSchedule(db.Model):
         return cls(**spec)
 
 
-class CrontabSchedule(db.Model):
+class CrontabSchedule(ScheduleBase):
     """Timezone Aware Crontab-like schedule.
 
     Example:  Run every hour at 0 minutes for days of month 10-15
@@ -192,59 +189,17 @@ class CrontabSchedule(db.Model):
     # 4 chars for each value (what we save on 0-9 accomodates the []).
     # We leave the other fields at their historical length.
     #
-    minute = models.CharField(
-        max_length=60 * 4, default='*',
-        verbose_name=_('Minute(s)'),
-        help_text=_(
-            'Cron Minutes to Run. Use "*" for "all". (Example: "0,30")'),
-        validators=[validators.minute_validator],
-    )
-    hour = models.CharField(
-        max_length=24 * 4, default='*',
-        verbose_name=_('Hour(s)'),
-        help_text=_(
-            'Cron Hours to Run. Use "*" for "all". (Example: "8,20")'),
-        validators=[validators.hour_validator],
-    )
-    day_of_week = models.CharField(
-        max_length=64, default='*',
-        verbose_name=_('Day(s) Of The Week'),
-        help_text=_(
-            'Cron Days Of The Week to Run. Use "*" for "all". '
-            '(Example: "0,5")'),
-        validators=[validators.day_of_week_validator],
-    )
-    day_of_month = models.CharField(
-        max_length=31 * 4, default='*',
-        verbose_name=_('Day(s) Of The Month'),
-        help_text=_(
-            'Cron Days Of The Month to Run. Use "*" for "all". '
-            '(Example: "1,15")'),
-        validators=[validators.day_of_month_validator],
-    )
-    month_of_year = models.CharField(
-        max_length=64, default='*',
-        verbose_name=_('Month(s) Of The Year'),
-        help_text=_(
-            'Cron Months Of The Year to Run. Use "*" for "all". '
-            '(Example: "0,6")'),
-        validators=[validators.month_of_year_validator],
-    )
+    id = db.Column(db.Integer, db.ForeignKey(ScheduleBase.id, ondelete=""), primary_key=True)
+    minute = db.Column(db.String(60 * 4), default="*", doc=_("Minute(s)"))
+    hour = db.Column(db.String(24 * 4), default="*", doc=_("Hour's"))
+    day_of_week = db.Column(db.String(64), default="*")
+    day_of_month = db.Column(db.String(64), default="*")
+    month_of_year = db.Column(db.String(64), default="*")
+    timezone = db.Column(TzString(32), default="*")
 
-    timezone = timezone_field.TimeZoneField(
-        default='UTC',
-        verbose_name=_('Cron Timezone'),
-        help_text=_(
-            'Timezone to Run the Cron Schedule on.  Default is UTC.'),
-    )
-
-    class Meta:
-        """Table information."""
-
-        verbose_name = _('crontab')
-        verbose_name_plural = _('crontabs')
-        ordering = ['month_of_year', 'day_of_month',
-                    'day_of_week', 'hour', 'minute', 'timezone']
+    __mapper_args__ = {
+        'polymorphic_identity': 'CrontabSchedule',
+    }
 
     def __str__(self):
         return '{0} {1} {2} {3} {4} (m/h/d/dM/MY) {5}'.format(
@@ -280,7 +235,7 @@ class CrontabSchedule(db.Model):
                 'day_of_week': schedule._orig_day_of_week,
                 'day_of_month': schedule._orig_day_of_month,
                 'month_of_year': schedule._orig_month_of_year,
-                'timezone': schedule.tz
+                'timezone': str(schedule.tz)
                 }
         return cls(**spec)
 
@@ -294,10 +249,8 @@ class PeriodicTasks(db.Model):
     Doing this so we also track deletions, and not just insert/update.
     """
 
-    ident = models.SmallIntegerField(default=1, primary_key=True, unique=True)
-    last_update = models.DateTimeField(null=False)
-
-    objects = managers.ExtendedManager()
+    ident = db.Column(db.SmallInteger, primary_key=True, unique=True)
+    last_update = db.Column(db.DateTime, nullable=True)
 
     @classmethod
     def changed(cls, instance, **kwargs):
@@ -306,203 +259,55 @@ class PeriodicTasks(db.Model):
 
     @classmethod
     def update_changed(cls, **kwargs):
-        cls.objects.update_or_create(ident=1, defaults={'last_update': now()})
+        obj = cls.query.filter(cls.ident == 1).first()
+        if obj:
+            obj.last_update = arrow.utcnow().datetime
+        else:
+            obj = cls(ident=1, last_update=arrow.utcnow().datetime)
+        db.session.add(obj)
+        db.session.commit()
 
     @classmethod
     def last_change(cls):
-        try:
-            return cls.objects.get(ident=1).last_update
-        except cls.DoesNotExist:
-            pass
+        obj = cls.query.filter(cls.ident == 1).first()
+        if obj:
+            return obj.last_update
 
 
 class PeriodicTask(db.Model):
     """Model representing a periodic task."""
+    id = db.Column(db.Integer, primary_key=True)
+    name = db.Column(db.String(200), unique=True)
+    task = db.Column(db.String(200))
 
-    name = models.CharField(
-        max_length=200, unique=True,
-        verbose_name=_('Name'),
-        help_text=_('Short Description For This Task'),
-    )
-    task = models.CharField(
-        max_length=200,
-        verbose_name='Task Name',
-        help_text=_('The Name of the Celery Task that Should be Run.  '
-                    '(Example: "proj.tasks.import_contacts")'),
-    )
-
-    # You can only set ONE of the following schedule FK's
     # TODO: Redo this as a GenericForeignKey
-    interval = models.ForeignKey(
-        IntervalSchedule, on_delete=models.CASCADE,
-        null=True, blank=True, verbose_name=_('Interval Schedule'),
-        help_text=_('Interval Schedule to run the task on.  '
-                    'Set only one schedule type, leave the others null.'),
-    )
-    crontab = models.OneToOneField(
-        CrontabSchedule, on_delete=models.CASCADE, null=True, blank=True,
-        verbose_name=_('Crontab Schedule'),
-        help_text=_('Crontab Schedule to run the task on.  '
-                    'Set only one schedule type, leave the others null.'),
-    )
-    solar = models.OneToOneField(
-        SolarSchedule, on_delete=models.CASCADE, null=True, blank=True,
-        verbose_name=_('Solar Schedule'),
-        help_text=_('Solar Schedule to run the task on.  '
-                    'Set only one schedule type, leave the others null.'),
-    )
-    clocked = models.OneToOneField(
-        ClockedSchedule, on_delete=models.CASCADE, null=True, blank=True,
-        verbose_name=_('Clocked Schedule'),
-        help_text=_('Clocked Schedule to run the task on.  '
-                    'Set only one schedule type, leave the others null.'),
-    )
-    # TODO: use django's JsonField
-    args = models.TextField(
-        blank=True, default='[]',
-        verbose_name=_('Positional Arguments'),
-        help_text=_(
-            'JSON encoded positional arguments '
-            '(Example: ["arg1", "arg2"])'),
-    )
-    kwargs = models.TextField(
-        blank=True, default='{}',
-        verbose_name=_('Keyword Arguments'),
-        help_text=_(
-            'JSON encoded keyword arguments '
-            '(Example: {"argument": "value"})'),
-    )
+    args = db.Column(db.Text, default='[]')
+    kwargs = db.Column(db.Text, default="{}", nullable=True)
+    queue = db.Column(db.String(200), nullable=True, default=None)
+    exchange = db.Column(db.String(200), nullable=True, default=None)
+    routing_key = db.Column(db.String(200), nullable=True, default=None)
+    headers = db.Column(db.Text, nullable=True, default=None)
+    priority = db.Column(db.SmallInteger, nullable=True, default=None)
+    expires = db.Column(db.DateTime, nullable=True, default=None)
+    expire_seconds = db.Column(db.Integer, nullable=True, default=None)
+    one_off = db.Column(db.Boolean, default=False)
+    start_time = db.Column(db.DateTime, nullable=True)
+    enabled = db.Column(db.Boolean, nullable=True, default=True)
+    last_run_at = db.Column(db.DateTime, default=func.now())
+    total_run_count = db.Column(db.Integer, default=0)
+    date_changed = db.Column(db.DateTime, onupdate=func.now())
+    description = db.Column(db.Text, nullable=True)
 
-    queue = models.CharField(
-        max_length=200, blank=True, null=True, default=None,
-        verbose_name=_('Queue Override'),
-        help_text=_(
-            'Queue defined in CELERY_TASK_QUEUES. '
-            'Leave None for default queuing.'),
-    )
+    schedule_id = db.Column(db.ForeignKey(ScheduleBase.id), nullable=True)
+    model_schedule = db.relationship(ScheduleBase, uselist=False)
 
-    # you can use low-level AMQP routing options here,
-    # but you almost certaily want to leave these as None
-    # http://docs.celeryproject.org/en/latest/userguide/routing.html#exchanges-queues-and-routing-keys
-    exchange = models.CharField(
-        max_length=200, blank=True, null=True, default=None,
-        verbose_name=_('Exchange'),
-        help_text=_('Override Exchange for low-level AMQP routing'),
-    )
-    routing_key = models.CharField(
-        max_length=200, blank=True, null=True, default=None,
-        verbose_name=_('Routing Key'),
-        help_text=_('Override Routing Key for low-level AMQP routing'),
-    )
-    headers = models.TextField(
-        blank=True, default='{}',
-        verbose_name=_('AMQP Message Headers'),
-        help_text=_('JSON encoded message headers for the AMQP message.'),
-    )
-
-    priority = models.PositiveIntegerField(
-        default=None, validators=[MaxValueValidator(255)],
-        blank=True, null=True,
-        verbose_name=_('Priority'),
-        help_text=_(
-            'Priority Number between 0 and 255. '
-            'Supported by: RabbitMQ, Redis (priority reversed, 0 is highest).')
-    )
-    expires = models.DateTimeField(
-        blank=True, null=True,
-        verbose_name=_('Expires Datetime'),
-        help_text=_(
-            'Datetime after which the schedule will no longer '
-            'trigger the task to run'),
-    )
-    expire_seconds = models.PositiveIntegerField(
-        blank=True, null=True,
-        verbose_name=_('Expires timedelta with seconds'),
-        help_text=_(
-            'Timedelta with seconds which the schedule will no longer '
-            'trigger the task to run'),
-
-    )
-    one_off = models.BooleanField(
-        default=False,
-        verbose_name=_('One-off Task'),
-        help_text=_(
-            'If True, the schedule will only run the task a single time'),
-    )
-    start_time = models.DateTimeField(
-        blank=True, null=True,
-        verbose_name=_('Start Datetime'),
-        help_text=_(
-            'Datetime when the schedule should begin '
-            'triggering the task to run'),
-    )
-    enabled = models.BooleanField(
-        default=True,
-        verbose_name=_('Enabled'),
-        help_text=_('Set to False to disable the schedule'),
-    )
-    last_run_at = models.DateTimeField(
-        auto_now=False, auto_now_add=False,
-        editable=False, blank=True, null=True,
-        verbose_name=_('Last Run Datetime'),
-        help_text=_(
-            'Datetime that the schedule last triggered the task to run. '
-            'Reset to None if enabled is set to False.'),
-    )
-    total_run_count = models.PositiveIntegerField(
-        default=0, editable=False,
-        verbose_name=_('Total Run Count'),
-        help_text=_(
-            'Running count of how many times the schedule '
-            'has triggered the task'),
-    )
-    date_changed = models.DateTimeField(
-        auto_now=True,
-        verbose_name=_('Last Modified'),
-        help_text=_('Datetime that this PeriodicTask was last modified'),
-    )
-    description = models.TextField(
-        blank=True,
-        verbose_name=_('Description'),
-        help_text=_(
-            'Detailed description about the details of this Periodic Task'),
-    )
-
-    objects = managers.PeriodicTaskManager()
     no_changes = False
 
-    class Meta:
-        """Table information."""
-
-        verbose_name = _('periodic task')
-        verbose_name_plural = _('periodic tasks')
-
     def validate_unique(self, *args, **kwargs):
-        super(PeriodicTask, self).validate_unique(*args, **kwargs)
-
-        schedule_types = ['interval', 'crontab', 'solar', 'clocked']
-        selected_schedule_types = [s for s in schedule_types
-                                   if getattr(self, s)]
-
-        if len(selected_schedule_types) == 0:
-            raise ValidationError({
-                'interval': [
-                    'One of clocked, interval, crontab, or solar must be set.'
-                ]
-            })
-
-        err_msg = 'Only one of clocked, interval, crontab, '\
-            'or solar must be set'
-        if len(selected_schedule_types) > 1:
-            error_info = {}
-            for selected_schedule_type in selected_schedule_types:
-                error_info[selected_schedule_type] = [err_msg]
-            raise ValidationError(error_info)
-
         # clocked must be one off task
-        if self.clocked and not self.one_off:
+        if isinstance(self.model_schedule, ClockedSchedule) and not self.model_schedule.one_off:
             err_msg = 'clocked must be one off, one_off must set True'
-            raise ValidationError(err_msg)
+            raise Exception(err_msg)
 
     def save(self, *args, **kwargs):
         self.exchange = self.exchange or None
@@ -513,11 +318,12 @@ class PeriodicTask(db.Model):
             self.last_run_at = None
         self._clean_expires()
         self.validate_unique()
-        super(PeriodicTask, self).save(*args, **kwargs)
+        db.session.add(self)
+        db.session.commit()
 
     def _clean_expires(self):
         if self.expire_seconds is not None and self.expires:
-            raise ValidationError(
+            raise Exception(
                 _('Only one can be set, in expires and expire_seconds')
             )
 
@@ -527,29 +333,28 @@ class PeriodicTask(db.Model):
 
     def __str__(self):
         fmt = '{0.name}: {{no schedule}}'
-        if self.interval:
-            fmt = '{0.name}: {0.interval}'
-        if self.crontab:
-            fmt = '{0.name}: {0.crontab}'
-        if self.solar:
-            fmt = '{0.name}: {0.solar}'
-        if self.clocked:
-            fmt = '{0.name}: {0.clocked}'
+        if self.model_schedule:
+            fmt = "{0.name}: {0.model_schedule}"
         return fmt.format(self)
 
     @property
     def schedule(self):
-        if self.interval:
-            return self.interval.schedule
-        if self.crontab:
-            return self.crontab.schedule
-        if self.solar:
-            return self.solar.schedule
-        if self.clocked:
-            return self.clocked.schedule
+        return self.model_schedule.schedule
 
     def delete(self, using=None, keep_parents=False):
         delete_entry = self.interval or self.crontab or self.solar or self.clocked
         delete_entry.delete()
         return super(PeriodicTask, self).delete(using=using, keep_parents=keep_parents)
 
+
+"""
+[event_t(time=1587697359.352167, priority=5, entry=<ModelEntry: say_hello modules.routines.tasks.say_hello(*[], **{}) <crontab: */1 *
+         * *
+          * (m/h/d/dM/MY), UTC>
+        >), event_t(time=1587726124.36578, priority=5, entry=<ModelEntry: interval_say_hello modules.routines.tasks.say_hello(*[], **{}) <freq: 3.00 seconds>>), 
+        
+        event_t(time=1587700814.284076, priority=5, entry=<ModelEntry: celery.backend_cleanup celery.backend_cleanup(*[], **{}) <crontab: 0 4
+         * *
+          * (m/h/d/dM/MY), UTC>
+        >)]
+"""
