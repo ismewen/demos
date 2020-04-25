@@ -9,6 +9,7 @@ django有个扩展，`django-celery-beat`, 可以把`schedule` 存储在数据�
  - **数据库中的任务拥有最高优先级** 如果数据库中已经存在了改task，这里的配置不会覆盖数据库中的task
  - 所有的时间都为utc时间
 
+```python
 CELERYBEAT_SCHEDULE = {
     "say_hello": {
         "task": "modules.routines.tasks.say_hello",
@@ -23,6 +24,8 @@ CELERYBEAT_SCHEDULE = {
         "schedule": clocked(clocked_time=arrow.utcnow().shift(minutes=3).datetime, enabled=True),
     }
 }
+```
+
 
 #### 启动命令
 
