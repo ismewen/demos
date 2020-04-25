@@ -123,6 +123,7 @@ class ModelEntry(ScheduleEntry):
         # ONE OFF TASK: Disable one off tasks after they've ran once
         if self.model.one_off and self.model.enabled \
                 and self.model.total_run_count > 0:
+            print("here.......")
             self.model.enabled = False
             self.model.total_run_count = 0  # Reset
             self.model.no_changes = False  # Mark the model entry as changed
@@ -183,6 +184,7 @@ class ModelEntry(ScheduleEntry):
         if not task:
             kwargs = cls._unpack_fields(**entry)
             task = PeriodicTask(name=name, **kwargs)
+            schedule = kwargs.get("model_schedule")
             task.save()
         return cls(task, app=app)
 
@@ -191,6 +193,8 @@ class ModelEntry(ScheduleEntry):
                        args=None, kwargs=None, relative=None, options=None,
                        **entry):
         model_schedule, model_field = cls.to_model_schedule(schedule)
+        if isinstance(model_schedule, ClockedSchedule):
+            entry.update({"one_off": True})
         entry.update(
             {model_field: model_schedule},
             args=dumps(args or []),
