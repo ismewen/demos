@@ -46,6 +46,7 @@ def cronexp(field):
 class ScheduleBase(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     type = db.Column(db.String(128))
+    task_id = db.Column(db.ForeignKey("periodic_task.id"), nullable=True)
 
     __mapper_args__ = {
         'polymorphic_identity': 'Schedule',
@@ -298,14 +299,14 @@ class PeriodicTask(db.Model):
     date_changed = db.Column(db.DateTime, onupdate=func.now())
     description = db.Column(db.Text, nullable=True)
 
-    schedule_id = db.Column(db.ForeignKey(ScheduleBase.id), nullable=True)
+    # schedule_id = db.Column(db.ForeignKey(ScheduleBase.id), nullable=True)
     model_schedule = db.relationship(ScheduleBase, uselist=False)
 
     no_changes = False
 
     def validate_unique(self, *args, **kwargs):
         # clocked must be one off task
-        if isinstance(self.model_schedule, ClockedSchedule) and not self.model_schedule.one_off:
+        if isinstance(self.model_schedule, ClockedSchedule) and not self.one_off:
             err_msg = 'clocked must be one off, one_off must set True'
             raise Exception(err_msg)
 
