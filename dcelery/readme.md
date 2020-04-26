@@ -1,6 +1,6 @@
 ### about
-django有个扩展，`django-celery-beat`, 可以把`schedule` 存储在数据库中。通过数据库来进行任务调度。个人觉得十分好用，所以决定把它抄到flask中，
-也就有了这个demo。
+django有个扩展，`django-celery-beat`, 可以把`schedule` 存储在数据库中。通过数据库来进行任务调度。个人觉得十分好用，也翻看了它的源码，为了
+加深理解，所以决定把它抄到flask中，于是也就有了dcelery这个demo。
 
 ### quick start 
 
