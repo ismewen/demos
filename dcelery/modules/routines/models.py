@@ -4,6 +4,7 @@ import arrow
 from celery import schedules
 from flask_babel import gettext as _
 from sqlalchemy import func
+from sqlalchemy.dialects.postgresql import insert
 
 from core import db
 from modules.routines.sqltypes import TzString
@@ -260,6 +261,25 @@ class PeriodicTasks(db.Model):
 
     @classmethod
     def update_changed(cls, **kwargs):
+        connection = kwargs.get("connection")
+        if connection:
+            table = cls.__table__
+            insert_stmt = insert(table).values(
+                ident=1,
+                last_update=arrow.utcnow().datetime,
+
+            )
+            smt_on_conflict = insert_stmt.on_conflict_do_update(
+                index_elements=['ident'],
+                set_={
+                    "last_update": arrow.utcnow().datetime
+                },
+                where=(table.c.ident == 1)
+            )
+            connection.execute(
+                smt_on_conflict
+            )
+            return
         obj = cls.query.filter(cls.ident == 1).first()
         if obj:
             obj.last_update = arrow.utcnow().datetime
@@ -348,14 +368,23 @@ class PeriodicTask(db.Model):
         return super(PeriodicTask, self).delete(using=using, keep_parents=keep_parents)
 
 
-"""
-[event_t(time=1587697359.352167, priority=5, entry=<ModelEntry: say_hello modules.routines.tasks.say_hello(*[], **{}) <crontab: */1 *
-         * *
-          * (m/h/d/dM/MY), UTC>
-        >), event_t(time=1587726124.36578, priority=5, entry=<ModelEntry: interval_say_hello modules.routines.tasks.say_hello(*[], **{}) <freq: 3.00 seconds>>), 
-        
-        event_t(time=1587700814.284076, priority=5, entry=<ModelEntry: celery.backend_cleanup celery.backend_cleanup(*[], **{}) <crontab: 0 4
-         * *
-          * (m/h/d/dM/MY), UTC>
-        >)]
-"""
+def after_schedule_change(mapper, connection, target):
+    #
+    if hasattr(target, "no_changes"):
+        no_changes = target.no_changes
+        if not no_changes:
+            PeriodicTasks.update_changed(connection=connection)
+    else:
+        PeriodicTasks.update_changed(connection=connection)
+
+
+db.event.listens_for(IntervalSchedule, 'after_insert')(after_schedule_change)
+db.event.listens_for(IntervalSchedule, 'after_update')(after_schedule_change)
+db.event.listens_for(ClockedSchedule, 'after_insert')(after_schedule_change)
+db.event.listens_for(ClockedSchedule, 'after_update')(after_schedule_change)
+db.event.listens_for(SolarSchedule, 'after_insert')(after_schedule_change)
+db.event.listens_for(SolarSchedule, 'after_update')(after_schedule_change)
+db.event.listens_for(CrontabSchedule, 'after_insert')(after_schedule_change)
+db.event.listens_for(CrontabSchedule, 'after_update')(after_schedule_change)
+db.event.listens_for(PeriodicTask, 'after_update')(after_schedule_change)
+db.event.listens_for(PeriodicTask, 'after_insert')(after_schedule_change)
