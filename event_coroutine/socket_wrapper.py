@@ -36,6 +36,7 @@ class SocketWrapper(object):
         while True:
             try:
                 self.sock.send(data)
+                return
             except BlockingIOError as e:
                 await self.create_future_for_events(select.EPOLLOUT)
 
