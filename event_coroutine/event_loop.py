@@ -40,8 +40,8 @@ class EventLoop(object):
         try:
             future = coroutine.send(None)
             future.set_coroutine(coroutine)
-        except StopIteration as e:
-            print(" coroutine run stopped")
+        except Exception as e:
+            print(" coroutine run exception %s" % str(e))
 
     def run_forever(self):
         while True:
