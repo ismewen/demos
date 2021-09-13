@@ -27,7 +27,7 @@ class SocketWrapper(object):
     async def recv(self, rv_length):
         while True:
             try:
-                sock, addr = self.sock.recv(rv_length)
+                sock = self.sock.recv(rv_length)
                 return SocketWrapper(sock, loop=self.loop)
             except BlockingIOError:
                 await self.create_future_for_events(select.EPOLLIN)
