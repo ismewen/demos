@@ -52,3 +52,5 @@ class SocketWrapper(object):
                 self.loop.add_coroutine(future.coroutine)
 
         future.loop.register_handler(self.fileno(), events, handler)
+
+        return future
