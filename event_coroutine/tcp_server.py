@@ -23,11 +23,8 @@ class TCPServer(object):
             print("client connect addr = {}".format(addr))
             self.loop.add_coroutine(self.handle_client(sock))
 
-    def run_forever(self):
-        self.loop.run_forever()
-
 
 if __name__ == "__main__":
     loop = EventLoop.get_instance()
     server = TCPServer(loop)
-    server.run_forever()
+    loop.run_forever()
