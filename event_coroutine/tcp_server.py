@@ -9,10 +9,11 @@ class TCPServer(object):
         self.loop.add_coroutine(self.server_forever())
 
     async def handle_client(self, sock):
-        data = await sock.recv(1024)
-        if not data:
-            print("client disconnected")
-        await sock.send(data.upper())
+        while True:
+            data = await sock.recv(1024)
+            if not data:
+                print("client disconnected")
+            await sock.send(data.upper())
 
     async def server_forever(self):
         while True:
