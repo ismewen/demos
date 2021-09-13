@@ -42,6 +42,8 @@ class EventLoop(object):
             future.set_coroutine(coroutine)
         except Exception as e:
             print(coroutine)
+            import traceback
+            print(traceback.format_exc())
             print(" coroutine run exception %s" % str(e))
 
     def run_forever(self):
