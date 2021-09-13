@@ -32,11 +32,10 @@ class SocketWrapper(object):
             except BlockingIOError:
                 await self.create_future_for_events(select.EPOLLIN)
 
-    async def send(self):
+    async def send(self, data):
         while True:
             try:
-                sock, addr = self.sock.send()
-                return SocketWrapper(sock, loop=self.loop), addr
+                self.sock.send(data)
             except BlockingIOError as e:
                 await self.create_future_for_events(select.EPOLLOUT)
 
