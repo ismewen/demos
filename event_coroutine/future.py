@@ -17,5 +17,5 @@ class Future(object):
     # 如果没有完成任务，让出cpu
     def __await__(self):
         if not self.done:
-            yield
+            yield self
         return
