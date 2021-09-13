@@ -20,7 +20,7 @@ class SocketWrapper(object):
                 sock, addr = self.sock.accept()
                 return SocketWrapper(sock, loop=self.loop)
             except BlockingIOError:
-                return self.create_future_for_events(select.EPOLLIN)
+                await self.create_future_for_events(select.EPOLLIN)
 
     async def recv(self, rv_length):
         while True:
@@ -28,15 +28,15 @@ class SocketWrapper(object):
                 sock, addr = self.sock.recv(rv_length)
                 return SocketWrapper(sock, loop=self.loop)
             except BlockingIOError:
-                return self.create_future_for_events(select.EPOLLIN)
+                await self.create_future_for_events(select.EPOLLIN)
 
     async def send(self):
         while True:
             try:
                 sock, addr = self.sock.send()
-                return SocketWrapper(sock, loop=self.loop)
+                return SocketWrapper(sock, loop=self.loop), addr
             except BlockingIOError as e:
-                return self.create_future_for_events(select.EPOLLOUT)
+                await self.create_future_for_events(select.EPOLLOUT)
 
     def fileno(self):
         return self.sock.fileno()
