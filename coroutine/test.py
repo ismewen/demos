@@ -24,7 +24,7 @@ def producer(q):
         q.extend(["Goods" for x in range(5)])
         print("生产了 5 个 Goods")
 
-asyncio.Queue
+
 @coroutinewp
 def consumer(q):
     while True:
