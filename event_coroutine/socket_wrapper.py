@@ -47,10 +47,12 @@ class SocketWrapper(object):
         future = self.loop.create_future()
 
         def handler():
+            print("current future done")
             future.set_done()
             self.loop.unregister_handler(self.fileno())
             if future.coroutine:
                 # 继续调度
+                print("继续调度 %s" % future.coroutine)
                 self.loop.add_coroutine(future.coroutine)
 
         future.loop.register_handler(self.fileno(), events, handler)
