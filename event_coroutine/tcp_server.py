@@ -13,6 +13,7 @@ class TCPServer(object):
             data = await sock.recv(1024)
             if not data:
                 print("client disconnected")
+                break
             await sock.send(data.upper())
 
     async def server_forever(self):
