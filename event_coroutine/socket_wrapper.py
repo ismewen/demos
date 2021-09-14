@@ -55,6 +55,7 @@ class SocketWrapper(object):
                 print("继续调度 %s" % future.coroutine)
                 self.loop.add_coroutine(future.coroutine)
 
+        print("注册epoll事件, %s" % self.fileno())
         future.loop.register_handler(self.fileno(), events, handler)
 
         return future
