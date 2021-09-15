@@ -1,3 +1,6 @@
+import aiohttp
+
+
 class Future(object):
 
     def __init__(self, loop):
@@ -19,3 +22,12 @@ class Future(object):
         if not self.done:
             yield self
         return
+
+
+import asyncio
+
+
+async def test():
+    async with aiohttp.ClientSession() as session:
+        await session.get("http://www.baidu.com")
+t = asyncio.create_task(test())
