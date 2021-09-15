@@ -1,3 +1,4 @@
+import asyncio
 from collections import deque
 
 
@@ -25,3 +26,6 @@ class YieldLoop(object):
         while self.coroutines:
             coroutine = self.coroutines.popleft()
             self.run_coroutine(coroutine)
+
+
+asyncio.coroutine()
