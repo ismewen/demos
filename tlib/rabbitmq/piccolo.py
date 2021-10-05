@@ -2,6 +2,8 @@ import sys
 
 import json
 import logging
+import threading
+import time
 
 import pika
 from pika.exceptions import StreamLostError
@@ -10,7 +12,6 @@ logger = logging.getLogger("piccolo")
 handler = logging.StreamHandler(sys.stdout)
 logger.setLevel(logging.DEBUG)
 logger.addHandler(handler)
-
 
 PICCOLO_RABBITMQ_URL = "amqp://guest:guest@127.0.0.1:5672/piccolo?heartbeat=0&connection_attempts=20"
 
@@ -116,9 +117,6 @@ class Piccolo(object):
         for sub_cls in subses:
             cls.queue_registry[sub_cls.publish_queue_name] = sub_cls
 
-    def consume_payload(self, payload):
-        pass
-
     def consumer_callback(self, ch, method, properties, body):
         logger.info("receive an message %s" % body)
         try:
@@ -143,3 +141,17 @@ class Piccolo(object):
             self.connection.close()
             # supervisor reload
             exit(400)
+
+    def consume_payload(self, payload):
+        logger.info('receive new message')
+        message_thread = threading.Thread(target=self._consume_payload, kwargs=dict(payload=payload))
+        message_thread.start()
+        while message_thread.is_alive():
+            time.sleep(10)
+            logger.info("process data events")
+            self.connection.process_data_events()
+            # logger.info("waiting for message thread...")
+        logger.info("message thread done")
+
+    def _consume_payload(self, payload):
+        pass
